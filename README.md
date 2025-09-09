@@ -1,4 +1,4 @@
-This is the pipeline to analysis clinical outcomes, it's designed for MIMIC databases, but it's totally suitable for all the similar databases.
+This is a pipeline to analysis clinical outcomes, it's designed for MIMIC databases, but it's totally suitable for all the similar databases.
 
 Read our papers:
 
