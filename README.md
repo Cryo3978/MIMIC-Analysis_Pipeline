@@ -1,6 +1,7 @@
 This is the pipeline to analysis clinical outcomes, it's designed for MIMIC databases, but it's totally suitable for all the similar databases.
 
 Read our papers:
+
 [Machine Learning-Based Prediction of ICU Mortality in Sepsis-Associated Acute Kidney Injury Patients Using MIMIC-IV Database with Validation from eICU Database](https://arxiv.org/abs/2502.17978)
 
 [Predicting ICU Readmission in Acute Pancreatitis Patients Using a Machine Learning-Based Model with Enhanced Clinical Interpretability](https://scholar.google.com/citations?view_op=view_citation&hl=en&user=7jKYmkMAAAAJ&citation_for_view=7jKYmkMAAAAJ:Y0pCki6q_DkC)
