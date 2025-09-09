@@ -13,7 +13,9 @@ from content.model_training import ModelTrainer
 from content.model_explainers import ModelExplainer
 from content.preprocessing_methods import PreprocessingMethods
 import tensorflow as tf
+import warnings
 
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 class MIMICPipeline:
     def __init__(self, path,y_position=6, seed=42, test_size=0.2):
@@ -28,6 +30,10 @@ class MIMICPipeline:
         self._feature_engineering()
         self._model_training()
         self._explainability()
+        print('-'*42)
+        print(f'Selected features: {self.final_selected_features}')
+        print(f'Metrics of Xgboost: Train {self.metrics_xgb} \nTest {self.metrics_xgb_test}\n')
+        print(f'Metrics of Logistic Regression: Train {self.metrics_lr} \nTest {self.metrics_lr}\n')
     
     def _set_seed(self):
         os.environ['TF_DETERMINISTIC_OPS'] = '1'
@@ -72,24 +78,24 @@ class MIMICPipeline:
     def _model_training(self):
         trainer = ModelTrainer(self.X_train, self.Y_train, self.X_test, self.Y_test)
 
-        self.model_lr, auc_lr, self.cm_lr = trainer.train_logistic_regression()
-        print("LR AUC:", auc_lr)
+        # Logistic Regression
+        self.model_lr, self.metrics_lr, self.metrics_lr_test = trainer.train_logistic_regression()
 
-        self.model_xgb, auc_xgb, self.cm_xgb = trainer.train_xgboost()
-        print("XGB AUC:", auc_xgb)
+        # XGBoost
+        self.model_xgb, self.metrics_xgb, self.metrics_xgb_test = trainer.train_xgboost()
 
-        self.model_nn, auc_nn, self.cm_nn = trainer.train_neural_network()
-        print("NN AUC:", auc_nn)
-        # And more
+        #and more
 
-    def _explainability(self):
+
+    def _explainability(self, task='Mortality'):
         model = XGBClassifier().fit(self.X_train, self.Y_train)
 
         explainer = ModelExplainer(
             model=model,
             X_train=self.X_train,
             X_test=self.X_test,
-            feature_names=self.final_selected_features
+            feature_names=self.final_selected_features,
+            task=task
         )
 
         explainer.explain_shap(plot_summary=True)
@@ -97,4 +103,4 @@ class MIMICPipeline:
 
 
 if __name__ == "__main__":
-    pipeline = MIMICPipeline(path="./datasets/COPD.xlsx", y_position=7)
+    pipeline = MIMICPipeline(path="./datasets/test.xlsx", y_position=7)

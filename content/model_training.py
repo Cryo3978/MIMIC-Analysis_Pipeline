@@ -1,20 +1,90 @@
-# model_training.py
-
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix, roc_auc_score
+from sklearn.metrics import (
+    roc_auc_score, confusion_matrix,
+    precision_score, recall_score, f1_score
+)
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestRegressor, AdaBoostRegressor
 from sklearn.naive_bayes import GaussianNB
-from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.svm import SVC
 import lightgbm as lgb
 from xgboost import XGBClassifier
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.regularizers import l2
+import shap
+import lime
+from tqdm import tqdm
+
+
+import numpy as np
+import warnings
+from sklearn.metrics import roc_auc_score, confusion_matrix, precision_score, recall_score, f1_score
+
+def compute_metrics(y_true, y_prob, threshold=0.5, n_bootstrap=1000, random_state=42):
+    """
+    Compute:
+      - AUC and 95% CI (bootstrap)
+      - Precision, Recall, F1 (no CI)
+      - Confusion matrix (based on threshold)
+    NOTE: y_true and y_prob will be coerced to numpy arrays to avoid pandas label-indexing issues.
+    """
+    # ---- 强制为 numpy array，按位置索引 ----
+    y_true = np.asarray(y_true).ravel()
+    y_prob = np.asarray(y_prob).ravel()
+
+    if len(y_true) != len(y_prob):
+        raise ValueError("y_true and y_prob must have the same length.")
+
+    # 二分类预测（按阈值）
+    y_pred = (y_prob >= threshold).astype(int)
+
+    # ---- AUC（可能因为单一类别而无法计算） ----
+    try:
+        auc = float(roc_auc_score(y_true, y_prob))
+    except Exception as e:
+        warnings.warn(f"AUC could not be computed: {e}")
+        auc = float("nan")
+
+    # ---- bootstrap CI for AUC ----
+    bootstrapped_scores = []
+    rng = np.random.default_rng(random_state)
+
+    # 如果 auc 无法计算（例如 y_true 全为同一类），跳过 bootstrap
+    if not np.isnan(auc):
+        for _ in range(n_bootstrap):
+            # 有放回抽样位置索引（positional）
+            idx = rng.choice(len(y_true), size=len(y_true), replace=True)
+            # 如果抽样样本只包含单一类，跳过这次抽样
+            if len(np.unique(y_true[idx])) < 2:
+                continue
+            try:
+                s = roc_auc_score(y_true[idx], y_prob[idx])
+                bootstrapped_scores.append(s)
+            except Exception:
+                # 某些罕见情况（如常数预测）会抛异常，直接跳过
+                continue
+
+    if len(bootstrapped_scores) >= 2:
+        ci_lower, ci_upper = np.percentile(bootstrapped_scores, [2.5, 97.5])
+    else:
+        ci_lower, ci_upper = (float("nan"), float("nan"))
+
+    # ---- 其它分类指标 ----
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    cm = confusion_matrix(y_true, y_pred)
+
+    return {
+        "AUC": auc,
+        "AUC_CI95": (ci_lower, ci_upper),
+        "Precision": precision,
+        "Recall": recall,
+        "F1": f1,
+        "ConfusionMatrix": cm,
+        "n_bootstrap_used": len(bootstrapped_scores)
+    }
+
+
 
 class ModelTrainer:
     def __init__(self, X_train, Y_train, X_test, Y_test):
@@ -26,93 +96,109 @@ class ModelTrainer:
     def train_logistic_regression(self):
         model = LogisticRegression(max_iter=1000, random_state=42)
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_xgboost(self):
         model = XGBClassifier(
             objective="binary:logistic",
-            n_estimators=1000,
-            learning_rate=0.025,
-            max_depth=7,
+            n_estimators=500,
+            learning_rate=0.05,
+            max_depth=6,
             subsample=0.8,
             colsample_bytree=0.8,
             reg_alpha=0.05,
-            reg_lambda=0.08,
+            reg_lambda=0.1,
             eval_metric="logloss",
             use_label_encoder=False,
             random_state=42
         )
-        model.fit(self.X_train, self.Y_train, eval_set=[(self.X_test, self.Y_test)], verbose=False)
-        prob_test = model.predict_proba(self.X_test)[:, 1]
-        auc_test = roc_auc_score(self.Y_test, prob_test)
-        return model, auc_test, confusion_matrix(self.Y_test, prob_test > 0.5)
+        model.fit(self.X_train, self.Y_train)
 
-    def train_neural_network(self):
-        model = Sequential([
-            Dense(128, activation="relu", input_dim=self.X_train.shape[1], kernel_regularizer=l2(0.01)),
-            Dense(64, activation="relu", kernel_regularizer=l2(0.01)),
-            Dense(16, activation="relu"),
-            Dense(8, activation="relu"),
-            Dense(1, activation="sigmoid")
-        ])
-        model.compile(optimizer=Adam(learning_rate=0.015), loss="binary_crossentropy", metrics=["AUC"])
-        es = EarlyStopping(monitor="val_loss", patience=10, min_delta=1e-4, restore_best_weights=True)
-        model.fit(self.X_train, self.Y_train, validation_data=(self.X_test, self.Y_test),
-                  epochs=1000, batch_size=256, callbacks=[es], verbose=0)
-        prob_test = model.predict(self.X_test)[:, 0]
-        auc_test = roc_auc_score(self.Y_test, prob_test)
-        return model, auc_test, confusion_matrix(self.Y_test, prob_test > 0.5)
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_random_forest(self):
-        model = RandomForestRegressor(
-            n_estimators=1000, criterion='squared_error',
-            max_depth=7, min_samples_split=20, random_state=42
+        model = RandomForestClassifier(
+            n_estimators=500, max_depth=7, min_samples_split=20, random_state=42
         )
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test > 0.25)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_ada_boost(self):
-        model = AdaBoostRegressor(
-            n_estimators=200, learning_rate=0.5,
-            loss='linear', random_state=42
+        model = AdaBoostClassifier(
+            n_estimators=200, learning_rate=0.5, random_state=42
         )
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test > 0.25)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_naive_bayes(self):
         model = GaussianNB()
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_svm(self):
-        model = SVR(kernel='rbf', C=1, epsilon=0.03)
+        model = SVC(kernel="rbf", C=1, probability=True, random_state=42)
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test > 0.25)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
 
     def train_lightgbm(self):
-        model = lgb.LGBMRegressor(
-            objective='regression',
-            n_estimators=100,
+        model = lgb.LGBMClassifier(
+            n_estimators=200,
             learning_rate=0.05,
-            max_depth=5,
+            max_depth=6,
             num_leaves=31,
             colsample_bytree=0.8,
             subsample=0.8,
-            reg_alpha=0.8,
-            reg_lambda=0.7,
+            reg_alpha=0.1,
+            reg_lambda=0.1,
             random_state=42
         )
         model.fit(self.X_train, self.Y_train)
-        pred_test = model.predict(self.X_test)
-        auc_test = roc_auc_score(self.Y_test, pred_test)
-        return model, auc_test, confusion_matrix(self.Y_test, pred_test > 0.25)
+
+        prob_train = model.predict_proba(self.X_train)[:, 1]
+        prob_test = model.predict_proba(self.X_test)[:, 1]
+
+        metrics_train = compute_metrics(self.Y_train, prob_train)
+        metrics_test = compute_metrics(self.Y_test, prob_test)
+
+        return model, metrics_train, metrics_test
