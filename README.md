@@ -8,7 +8,7 @@ but the methodology is generalizable and applicable to other similar clinical da
 
 ## Related Publications
 
-- [Predicting ICU Readmission in Acute Pancreatitis Patients Using a Machine Learning-Based Model with Enhanced Clinical Interpretability](https://scholar.google.com/citations?view_op=view_citation&hl=en&user=7jKYmkMAAAAJ&citation_for_view=7jKYmkMAAAAJ:Y0pCki6q_DkC)
+- [Predicting ICU Readmission in Acute Pancreatitis Patients Using a Machine Learning-Based Model with Enhanced Clinical Interpretability](https://arxiv.org/abs/2505.14850)
 
 ---
 
