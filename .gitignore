@@ -1,0 +1,24 @@
+# bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# env
+.venv/
+venv/
+.env
+
+datasets/
+
+# IDE
+.idea/
+*.iml
+
+# generated outputs (optional: uncomment to ignore)
+# outputs/
+# *.png
+# threshold_metrics_*.csv
+
+# OS
+.DS_Store
+Thumbs.db
